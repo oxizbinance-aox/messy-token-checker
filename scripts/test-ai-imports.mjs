@@ -55,6 +55,8 @@ check("firebase/app-check exports initializeAppCheck", () =>
   assert.equal(typeof appCheck.initializeAppCheck, "function"));
 check("firebase/app-check exports ReCaptchaEnterpriseProvider", () =>
   assert.equal(typeof appCheck.ReCaptchaEnterpriseProvider, "function"));
+check("firebase/app-check exports getToken (round-3 App Check prefetch)", () =>
+  assert.equal(typeof appCheck.getToken, "function"));
 
 // 3. verdictSchema — the 6 expected properties + enum
 const { verdictSchema } = await import(src("src/ai/verdictSchema.js"));
@@ -130,6 +132,22 @@ check("firebase.js exports app/ai/initFirebase", () => {
   assert.equal(typeof fb.initFirebase, "function");
   assert.ok(fb.app, "app is null after import");
   assert.ok(fb.ai, "ai is null after import");
+});
+check("firebase.js exports prefetchAppCheckToken (round-3 diagnosis)", () =>
+  assert.equal(typeof fb.prefetchAppCheckToken, "function"));
+// check() is sync, so the async assertion runs directly (top-level await):
+assert.equal(await fb.prefetchAppCheckToken(), null);
+passed += 1;
+console.log("PASS: prefetchAppCheckToken returns null in Node (no App Check instance)");
+
+// 7. timing.js — round-3 per-phase [ai-timing] log (console-only, shipped)
+const { createAiTimer } = await import(src("src/ai/timing.js"));
+check("timing.js exports createAiTimer", () =>
+  assert.equal(typeof createAiTimer, "function"));
+check("createAiTimer().mark logs without throwing in Node", () => {
+  const timer = createAiTimer("test");
+  assert.equal(typeof timer.mark, "function");
+  assert.equal(typeof timer.mark("probe", "extra"), "number");
 });
 
 console.log(`\nAll ${passed} checks passed.`);

@@ -166,12 +166,14 @@ function normalizeRoute(raw) {
  *
  * @param {import("firebase/ai").GenerativeModel} model — from getHybridModel()/getCloudOnlyModel()
  * @param {string} prompt — from buildVerdictPrompt()
+ * @param {{ mark: (name: string, extra?: string) => number } | null} [timer]
+ *   — per-check [ai-timing] timer (round 3); logs generateContent timing
  * @returns {Promise<{ data: object, route: string, routeCertain: boolean, rawText: string }>}
  *   data: parsed verdict JSON. route: "ON_DEVICE" | "IN_CLOUD" (certain),
  *   or "likely on-device" | "likely cloud" (inferred fallback).
  *   routeCertain is false when the route had to be inferred.
  */
-export async function explainVerdict(model, prompt) {
+export async function explainVerdict(model, prompt, timer = null) {
   if (!model || typeof model.generateContent !== "function") {
     throw new Error(
       "[hybrid] explainVerdict: expected a GenerativeModel from getHybridModel() or getCloudOnlyModel().",
@@ -182,9 +184,12 @@ export async function explainVerdict(model, prompt) {
   }
 
   let result;
+  timer?.mark("generateContent start");
   try {
     result = await model.generateContent(prompt);
+    timer?.mark("generateContent ok");
   } catch (err) {
+    timer?.mark("generateContent error");
     throw new Error(
       `[hybrid] generateContent failed: ${err?.message || err}`,
     );
@@ -219,21 +224,29 @@ export async function explainVerdict(model, prompt) {
   // Route detection (JS SDK v12.5.0+): result.response.inferenceSource.
   // Fallback if the property is ever missing: infer from
   // LanguageModel.availability() and label the route as "likely ...".
+  // The availability probe is bounded (5s race): it is a local API, but
+  // an unguarded await here would stall explainVerdict after a
+  // successful generateContent — and the round-3 audit found this was
+  // the one await in the AI path with no timeout of its own.
   let route = normalizeRoute(result.response?.inferenceSource);
   let routeCertain = route !== null;
   if (!routeCertain) {
-    try {
-      const availability =
-        typeof LanguageModel !== "undefined"
-          ? await LanguageModel.availability()
-          : "unavailable";
-      route =
-        availability === "available"
-          ? ROUTE_LIKELY_ON_DEVICE
-          : ROUTE_LIKELY_CLOUD;
-    } catch {
-      route = ROUTE_LIKELY_CLOUD;
-    }
+    const availability = await Promise.race([
+      (async () => {
+        try {
+          return typeof LanguageModel !== "undefined"
+            ? await LanguageModel.availability()
+            : "unavailable";
+        } catch {
+          return "unavailable";
+        }
+      })(),
+      new Promise((resolve) => setTimeout(() => resolve("unavailable"), 5_000)),
+    ]);
+    route =
+      availability === "available"
+        ? ROUTE_LIKELY_ON_DEVICE
+        : ROUTE_LIKELY_CLOUD;
   }
 
   return { data, route, routeCertain, rawText };
@@ -246,7 +259,19 @@ export async function explainVerdict(model, prompt) {
  * @returns {Promise<{ status: "available" | "downloading" | "downloadable" | "unavailable", detail: string }>}
  */
 export async function checkNanoAvailability() {
+  // Round-3 timing: the probe is phase (a) of the AI path. Log it in the
+  // same [ai-timing] format so the live re-test can see whether the probe
+  // itself ever stalls (it is a local API and normally resolves in ms).
+  const hasPerf =
+    typeof performance !== "undefined" &&
+    typeof performance.now === "function";
+  const t0 = hasPerf ? performance.now() : Date.now();
+  const ms = () =>
+    Math.round((hasPerf ? performance.now() : Date.now()) - t0);
+  const log = (status) =>
+    console.log(`[ai-timing probe] nano-probe status=${status} +${ms()}ms`);
   if (typeof LanguageModel === "undefined") {
+    log("unavailable");
     return {
       status: "unavailable",
       detail:
@@ -260,13 +285,16 @@ export async function checkNanoAvailability() {
       status === "downloading" ||
       status === "downloadable"
     ) {
+      log(status);
       return { status, detail: `LanguageModel.availability() returned "${status}".` };
     }
+    log("unavailable");
     return {
       status: "unavailable",
       detail: `LanguageModel.availability() returned "${status}".`,
     };
   } catch (err) {
+    log("unavailable");
     return {
       status: "unavailable",
       detail: `LanguageModel.availability() threw: ${err?.message || err}`,

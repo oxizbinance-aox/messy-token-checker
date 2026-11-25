@@ -8,7 +8,7 @@
 // (e.g. Node smoke tests) App Check is skipped and init stays lazy-safe.
 
 import { initializeApp } from "firebase/app";
-import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "firebase/app-check";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider, getToken } from "firebase/app-check";
 import { getAI, GoogleAIBackend } from "firebase/ai";
 
 // Public client config for the "messy-token-checker" Firebase project
@@ -33,6 +33,39 @@ const RECAPTCHA_ENTERPRISE_SITE_KEY = "6LdCSzEuAAAAAHIf7wDiZmij1LwwNAadEPCPim3L"
 export let app = null;
 export let ai = null;
 export let appCheck = null;
+
+/**
+ * Fetch an App Check token explicitly, with per-phase timing.
+ *
+ * Round 3 diagnosis (26 Nov 2026): the cloud AI call started timing out
+ * (3/3 live failures, each burning the full 90s) after succeeding twice
+ * the same day. Inside generateContent the SDK fetches this token
+ * invisibly — reCAPTCHA Enterprise execute + token exchange with
+ * firebaseappcheck.googleapis.com — so a stall there looks exactly like
+ * a slow model. Prefetching it here (a) makes the phase visible in the
+ * [ai-timing] console lines and (b) warms the SDK's token cache, so the
+ * generateContent call that follows reuses the token instead of fetching
+ * it again. Returns null when there is no App Check instance (Node /
+ * non-browser runtimes) — the caller then proceeds and generateContent
+ * reports its own error.
+ *
+ * @param {{ mark: (name: string, extra?: string) => number } | null} [timer]
+ * @returns {Promise<{ token: string, expireTimeMillis: number } | null>}
+ */
+export async function prefetchAppCheckToken(timer = null) {
+  if (!appCheck) {
+    timer?.mark("appcheck:getToken skipped", "(no App Check instance)");
+    return null;
+  }
+  timer?.mark("appcheck:getToken start");
+  const { token, expireTimeMillis } = await getToken(appCheck);
+  const ttlS = Math.max(
+    0,
+    Math.round((expireTimeMillis - Date.now()) / 1000),
+  );
+  timer?.mark("appcheck:getToken ok", `(token expires in ${ttlS}s)`);
+  return { token, expireTimeMillis };
+}
 
 let initialized = false;
 

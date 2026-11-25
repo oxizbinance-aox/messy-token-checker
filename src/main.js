@@ -33,6 +33,8 @@
 
 import "./style.css";
 import "./firebase.js"; // eager initFirebase() on import
+import { prefetchAppCheckToken } from "./firebase.js";
+import { createAiTimer } from "./ai/timing.js";
 import { fetchTokenPairs, isValidAddress, DexscreenerError } from "./data/dexscreener.js";
 import { fetchTokenSecurity } from "./data/goplus.js";
 import { withTimeout } from "./data/http.js";
@@ -96,6 +98,15 @@ let checking = false;
 const AI_TIMEOUT_MS = 90_000;
 const NANO_STATUS_TIMEOUT_MS = 5_000;
 const OVERALL_CHECK_TIMEOUT_MS = 240_000;
+/**
+ * App Check token prefetch bound (round 3): the token fetch is the one
+ * phase of generateContent the app could not see — reCAPTCHA Enterprise
+ * execute + token exchange. It normally takes 1–5s; 30s is 6–30x that.
+ * If it cannot complete in 30s, the generateContent call that follows
+ * would burn its full 90s on the same stall, so runAi fails fast with a
+ * precise App Check error instead (the Retry button can re-run it).
+ */
+const APPCHECK_TIMEOUT_MS = 30_000;
 
 /** Sequence number of the current check — stale continuations bail out. */
 let checkSeq = 0;
@@ -382,7 +393,7 @@ async function runCheck(address) {
     markLoadingStep(statusEl, "score", "done");
     markLoadingStep(statusEl, "ai", "active");
     try {
-      ai = await runAi(prompt, useCloudOnly, model, lastNanoUnavailable);
+      ai = await runAi(prompt, useCloudOnly, model, lastNanoUnavailable, `check#${mySeq}`);
     } catch (err) {
       aiError = humanAiError(err);
       ai = null;
@@ -459,10 +470,43 @@ async function runCheck(address) {
  *   when null a fresh model is created (Retry path)
  * @param {boolean} [nanoUnavailable] — true when the Nano probe said
  *   "unavailable": skip the hybrid attempt, go straight to cloud-only
+ * @param {string} [checkId] — per-check label for the [ai-timing] log
+ *   (e.g. "check#7"); "retry" on the Retry path
  * @returns {Promise<{ data: object, route: string, routeCertain: boolean, rawText: string }>}
  * @throws the last error seen (cloud error if the retry ran, else hybrid error)
  */
-async function runAi(prompt, cloudOnly, existingModel = null, nanoUnavailable = false) {
+async function runAi(prompt, cloudOnly, existingModel = null, nanoUnavailable = false, checkId = "check") {
+  const timer = createAiTimer(checkId);
+  timer.mark(
+    "runAi start",
+    `mode=${cloudOnly || nanoUnavailable ? "cloud-only" : "hybrid"}`,
+  );
+
+  // App Check token prefetch (round 3) — the prime suspect for the 90s
+  // stall: generateContent fetches this token internally and invisibly
+  // (reCAPTCHA Enterprise execute + exchange with
+  // firebaseappcheck.googleapis.com). If that hop hangs, the whole call
+  // burns its 90s with no clue which phase stalled. Prefetch it
+  // explicitly with its own 30s bound: the SDK caches the token, so the
+  // generateContent call that follows reuses it instead of fetching it
+  // again. If the prefetch itself cannot complete in 30s, fail fast
+  // with a precise App Check error — the generateContent call would hit
+  // the exact same stall and burn its full 90s.
+  // NOTE: a 429/quota error would surface here (or in generateContent)
+  // as an error, not a hang — throttling does not explain a 90s stall.
+  try {
+    await withTimeout(
+      prefetchAppCheckToken(timer),
+      APPCHECK_TIMEOUT_MS,
+      "App Check token fetch timed out after 30s.",
+    );
+  } catch (err) {
+    timer.mark("appcheck:getToken FAILED");
+    throw new Error(
+      `[hybrid] App Check token fetch failed: ${err?.message ?? err}`,
+    );
+  }
+
   // Each attempt is bounded (live test 26 Nov 2026: the check hung for
   // 3.5+ min — a stalled generateContent would do the same). The Cancel
   // button / overall watchdog still cover the whole check.
@@ -471,26 +515,39 @@ async function runAi(prompt, cloudOnly, existingModel = null, nanoUnavailable = 
     // a 90s hybrid attempt on a model that cannot run — cloud directly.
     // A fresh cloud-only model is created here (existingModel may be the
     // hybrid one); creation is cheap and still inside user activation.
-    return withTimeout(
-      explainVerdict(getCloudOnlyModel(), prompt),
+    const model = getCloudOnlyModel();
+    timer.mark("model:create cloud-only");
+    const out = await withTimeout(
+      explainVerdict(model, prompt, timer),
       AI_TIMEOUT_MS,
       "The cloud AI request timed out after 90s.",
     );
+    timer.mark("runAi done", `route=${out.route}`);
+    return out;
   }
   try {
-    return await withTimeout(
-      explainVerdict(existingModel ?? getHybridModel(), prompt),
+    const model = existingModel ?? getHybridModel();
+    timer.mark("model:create hybrid");
+    const out = await withTimeout(
+      explainVerdict(model, prompt, timer),
       AI_TIMEOUT_MS,
       "The AI request timed out after 90s.",
     );
+    timer.mark("runAi done", `route=${out.route}`);
+    return out;
   } catch (hybridErr) {
     console.warn("[check] hybrid model failed, retrying with cloud-only:", hybridErr);
+    timer.mark("hybrid failed, retrying cloud-only");
     try {
-      return await withTimeout(
-        explainVerdict(getCloudOnlyModel(), prompt),
+      const model = getCloudOnlyModel();
+      timer.mark("model:create cloud-only (retry)");
+      const out = await withTimeout(
+        explainVerdict(model, prompt, timer),
         AI_TIMEOUT_MS,
         "The cloud AI request timed out after 90s.",
       );
+      timer.mark("runAi done", `route=${out.route}`);
+      return out;
     } catch (cloudErr) {
       // The cloud error is usually the actionable one (App Check, network,
       // quota); keep it, but remember the hybrid failure in the message
@@ -516,6 +573,14 @@ async function runAi(prompt, cloudOnly, existingModel = null, nanoUnavailable = 
 function humanAiError(err) {
   const raw = err?.message ?? String(err);
   const msg = raw.replace(/^\[hybrid\]\s*/i, "").trim();
+  if (/App Check token fetch/i.test(msg)) {
+    // Round 3: the explicit token prefetch (reCAPTCHA execute + token
+    // exchange) could not complete in 30s. This is NOT "App Check is not
+    // configured" — App Check IS configured and the token fetch worked
+    // before (26 Nov 2026 04:52 + 05:11) — it is the fetch itself
+    // stalling. Say so, so the live timings can confirm which hop it is.
+    return "Could not get an App Check token in 30s — the reCAPTCHA check or Google's token service did not answer in time. Retry in a moment.";
+  }
   if (/App Check|app-check|appcheck|appCheck\/fetch/i.test(msg)) {
     return "App Check is not configured for this app yet — the Firebase console steps (reCAPTCHA Enterprise key + App Check registration) are still pending, so the cloud route can't run.";
   }
@@ -558,7 +623,7 @@ async function retryAi() {
     // Reuse the last Nano probe outcome: in a Nano-less browser the
     // retry also goes straight to cloud-only instead of burning a
     // 90s hybrid attempt first.
-    const ai = await runAi(lastPrompt, cloudToggle?.checked === true, null, lastNanoUnavailable);
+    const ai = await runAi(lastPrompt, cloudToggle?.checked === true, null, lastNanoUnavailable, "retry");
     if (currentResult !== target) return; // a new check replaced the result
     currentResult = { ...currentResult, ai, aiError: null };
     renderResult(resultsEl, currentResult);
