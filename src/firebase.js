@@ -16,7 +16,7 @@ import { getAI, GoogleAIBackend } from "firebase/ai";
 // design — App Check is what protects it. Never put a debug token or any
 // secret in this file.
 const firebaseConfig = {
-  apiKey: "AIzaSyBLF14bcoiCTX3LRC1-kj_8GgCobVjQEz4",
+  apiKey: "AIzaSyBTlOwhLu73Z5LVxODTd5QtKCQBl7eIilo",
   authDomain: "messy-token-checker.firebaseapp.com",
   projectId: "messy-token-checker",
   storageBucket: "messy-token-checker.firebasestorage.app",
@@ -24,11 +24,11 @@ const firebaseConfig = {
   appId: "1:1091383452588:web:28c7fe863728254f979009",
 };
 
-// TODO: replace with the real reCAPTCHA Enterprise site key from the Firebase
-// console (Security > App Check > Apps) / Google Cloud Fraud Defense.
-// This placeholder MUST be replaced before the production deploy — it is
-// intentionally not a real key; never invent one here.
-const RECAPTCHA_ENTERPRISE_SITE_KEY = "TODO_REPLACE_WITH_RECAPTCHA_ENTERPRISE_SITE_KEY";
+// reCAPTCHA Enterprise site key (production App Check provider).
+// Key "Messy Token Checker Web", Website score-based, domains
+// messy-token-checker.web.app + messy-token-checker.firebaseapp.com only.
+// Set 26 Nov 2026 (rotated API key the same day after GitHub secret alert).
+const RECAPTCHA_ENTERPRISE_SITE_KEY = "6LdCSzEuAAAAAHIf7wDiZmij1LwwNAadEPCPim3L";
 
 export let app = null;
 export let ai = null;
