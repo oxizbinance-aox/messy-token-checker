@@ -560,13 +560,46 @@ input {
   color: var(--pink-soft);
   font-weight: 700;
 }
+.loading-main {
+  flex: 1;
+  min-width: 0;
+}
 .loading-note {
   margin: 12px 0 0;
   font-size: 13.5px;
   color: var(--text-muted);
 }
-.state-loading .btn-secondary {
-  margin-top: 14px;
+/* Header row: title + Cancel button side by side so Cancel is visible
+ * without scrolling (26 Nov 2026 live test: at the bottom of the card
+ * it was below the fold at 1920×998). */
+.loading-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.loading-head h2 {
+  margin: 0;
+}
+.loading-head .btn-secondary {
+  margin-top: 0;
+  flex-shrink: 0;
+}
+.loading-steps li.is-done {
+  color: var(--text);
+}
+.loading-steps li.is-done::before {
+  content: "✓ ";
+  color: var(--safe);
+}
+.loading-steps li.is-active {
+  color: var(--text);
+  font-weight: 600;
+}
+.loading-steps li.is-active::before {
+  content: "› ";
+  color: var(--pink);
 }
 
 .empty-state {

@@ -18,6 +18,11 @@
  *      call is retried once with the cloud-only model (PREFER_ON_DEVICE
  *      does not fall back when the on-device model itself rejects the
  *      request — live-tested 26 Nov 2026: "The input is too large").
+ *      EXCEPTION: when the Nano probe already said "unavailable", the
+ *      hybrid attempt is skipped entirely and the AI goes straight to
+ *      cloud-only — otherwise the check waits ~180s (two 90s timeouts)
+ *      for an AI that cannot run on-device (26 Nov 2026: $MESSY took
+ *      3–4 min and the AI timed out).
  *      If both fail, the score/verdict/factors still render and the AI
  *      section shows an unavailable state + Retry.
  *   8. Render, save to recent checks.
@@ -50,6 +55,7 @@ import {
 import {
   renderEmptyState,
   renderLoading,
+  markLoadingStep,
   renderError,
   renderResult,
   loadRecent,
@@ -97,6 +103,15 @@ let checkSeq = 0;
 let currentAbort = null;
 /** Overall-check watchdog timer (cleared on every exit path). */
 let overallTimer = null;
+/**
+ * Whether the last Nano availability probe said "unavailable".
+ * When true, runAi skips the hybrid model entirely and goes straight to
+ * cloud-only (see runAi) — trying PREFER_ON_DEVICE first in a browser
+ * with no Nano wastes up to 90s before the cloud retry runs (live-tested
+ * 26 Nov 2026: the $MESSY check took 3–4 min and the AI timed out).
+ * Updated by each check; retryAi reuses the last value.
+ */
+let lastNanoUnavailable = false;
 
 /** Reset the check button / checking flag and clear the watchdog. */
 function finishCheck() {
@@ -172,6 +187,14 @@ async function runCheck(address) {
   checkBtn.textContent = "Checking…";
   resultsEl.innerHTML = "";
   renderLoading(statusEl, addr, { onCancel: () => cancelCheck("user") });
+  markLoadingStep(statusEl, "dexscreener", "active");
+  markLoadingStep(statusEl, "goplus", "active");
+  // Bring the progress card (and its Cancel button) into view immediately:
+  // the status sits below the form, so without this the Cancel button can
+  // sit below the fold while the check runs (26 Nov 2026 live test).
+  // "instant", not "smooth" — the button must be visible the moment the
+  // check starts, not after a scroll animation.
+  statusEl.scrollIntoView({ behavior: "instant", block: "start" });
 
   // This check's identity: the Cancel button / watchdog invalidate it by
   // bumping checkSeq, and every continuation below bails out on mismatch.
@@ -215,6 +238,10 @@ async function runCheck(address) {
         setTimeout(() => resolve({ status: "unavailable" }), NANO_STATUS_TIMEOUT_MS),
       ),
     ]);
+    // Remember the probe outcome for the AI step: when Nano is
+    // unavailable, runAi skips the hybrid model and goes straight to
+    // cloud-only instead of burning up to 90s on a doomed hybrid attempt.
+    lastNanoUnavailable = nano?.status === "unavailable";
     if (
       nano?.status === "available" ||
       nano?.status === "downloading" ||
@@ -262,6 +289,11 @@ async function runCheck(address) {
     return;
   }
   if (mySeq !== checkSeq) return; // cancelled while fetching
+
+  // Both data sources are in — tick them off, scoring is next.
+  markLoadingStep(statusEl, "dexscreener", "done");
+  markLoadingStep(statusEl, "goplus", "done");
+  markLoadingStep(statusEl, "score", "active");
 
   // 6. Score locally; apply the GoPlus-down cap.
   let score = scoreToken({ pairs, goplus });
@@ -347,15 +379,24 @@ async function runCheck(address) {
   }
 
   if (prompt && model) {
+    markLoadingStep(statusEl, "score", "done");
+    markLoadingStep(statusEl, "ai", "active");
     try {
-      ai = await runAi(prompt, useCloudOnly, model);
+      ai = await runAi(prompt, useCloudOnly, model, lastNanoUnavailable);
     } catch (err) {
       aiError = humanAiError(err);
       ai = null;
     }
+    markLoadingStep(statusEl, "ai", "done");
   } else if (prompt && !model) {
+    markLoadingStep(statusEl, "score", "done");
+    markLoadingStep(statusEl, "ai", "done");
     aiError =
       "The AI model could not be created in this browser (Firebase AI Logic is not initialized).";
+  } else {
+    // No prompt (prompt build failed) — the AI stage is over either way.
+    markLoadingStep(statusEl, "score", "done");
+    markLoadingStep(statusEl, "ai", "done");
   }
   if (mySeq !== checkSeq) return; // cancelled while the AI was running
 
@@ -401,21 +442,37 @@ async function runCheck(address) {
  * So: try the hybrid model first; on ANY failure, retry once with the
  * cloud-only model. Both attempts happen inside the same user activation.
  *
+ * EXCEPTION — Nano unavailable (26 Nov 2026, $MESSY check took 3–4 min
+ * and the AI timed out): when LanguageModel.availability() already said
+ * "unavailable", the hybrid attempt still burns up to its 90s timeout
+ * before the cloud retry runs, so the check waits ~180s for the AI alone.
+ * When `nanoUnavailable` is true we skip the hybrid attempt entirely and
+ * go straight to the cloud-only model — one 90s-bounded call instead of
+ * two. (The $MESSY prompt is ~1019 chars vs BRETT ~1013 — prompt size
+ * does not explain the slowness; the hybrid attempt in a Nano-less
+ * browser does.)
+ *
  * @param {string} prompt
  * @param {boolean} cloudOnly — true when the "Use cloud meanwhile" toggle is on
  * @param {object|null} existingModel — the model already created in this
  *   activation (runCheck creates it so ensureDeviceModel can run on it);
  *   when null a fresh model is created (Retry path)
+ * @param {boolean} [nanoUnavailable] — true when the Nano probe said
+ *   "unavailable": skip the hybrid attempt, go straight to cloud-only
  * @returns {Promise<{ data: object, route: string, routeCertain: boolean, rawText: string }>}
  * @throws the last error seen (cloud error if the retry ran, else hybrid error)
  */
-async function runAi(prompt, cloudOnly, existingModel = null) {
+async function runAi(prompt, cloudOnly, existingModel = null, nanoUnavailable = false) {
   // Each attempt is bounded (live test 26 Nov 2026: the check hung for
   // 3.5+ min — a stalled generateContent would do the same). The Cancel
   // button / overall watchdog still cover the whole check.
-  if (cloudOnly) {
+  if (cloudOnly || nanoUnavailable) {
+    // No Nano in this browser (or the toggle forced cloud): never spend
+    // a 90s hybrid attempt on a model that cannot run — cloud directly.
+    // A fresh cloud-only model is created here (existingModel may be the
+    // hybrid one); creation is cheap and still inside user activation.
     return withTimeout(
-      explainVerdict(existingModel ?? getCloudOnlyModel(), prompt),
+      explainVerdict(getCloudOnlyModel(), prompt),
       AI_TIMEOUT_MS,
       "The cloud AI request timed out after 90s.",
     );
@@ -475,7 +532,10 @@ function humanAiError(err) {
     return "The cloud request hit a rate limit or quota — wait a minute and retry.";
   }
   if (/timed out|timeout/i.test(msg)) {
-    return "The AI request timed out — the model was too slow to answer. The score above is unaffected; retry in a moment.";
+    // NOTE: do NOT repeat "the score above is unaffected" here — the AI
+    // card already appends that sentence once (26 Nov 2026 live test:
+    // it rendered twice).
+    return "The AI request timed out — the model was too slow to answer. Retry in a moment.";
   }
   return msg;
 }
@@ -495,7 +555,10 @@ async function retryAi() {
   }
   try {
     // Model creation again on this user interaction (Retry click).
-    const ai = await runAi(lastPrompt, cloudToggle?.checked === true);
+    // Reuse the last Nano probe outcome: in a Nano-less browser the
+    // retry also goes straight to cloud-only instead of burning a
+    // 90s hybrid attempt first.
+    const ai = await runAi(lastPrompt, cloudToggle?.checked === true, null, lastNanoUnavailable);
     if (currentResult !== target) return; // a new check replaced the result
     currentResult = { ...currentResult, ai, aiError: null };
     renderResult(resultsEl, currentResult);

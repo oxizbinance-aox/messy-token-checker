@@ -78,6 +78,11 @@ function loadFixtures() {
  * Firebase / Google requests are NOT intercepted — in this sandbox they
  * fail (no browser egress), which is exactly the AI-unavailable path
  * the app must handle; on a machine with internet they go live.
+ *
+ * The GoPlus response is delayed ~2.5s on purpose so the loading state
+ * (steps ticking, Cancel button) is observable mid-check instead of
+ * flashing past — the fetches run in parallel, so the Dexscreener step
+ * resolves instantly while GoPlus is still "active".
  */
 async function installFixtureRoutes(page, fixtures) {
   await page.route("**/api.dexscreener.com/token-pairs/v1/base/*", (route) => {
@@ -89,7 +94,8 @@ async function installFixtureRoutes(page, fixtures) {
       route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
     }
   });
-  await page.route("**/api.gopluslabs.io/api/v1/token_security/8453*", (route) => {
+  await page.route("**/api.gopluslabs.io/api/v1/token_security/8453*", async (route) => {
+    await new Promise((r) => setTimeout(r, 2500));
     const addr = new URL(route.request().url()).searchParams
       .get("contract_addresses")
       ?.toLowerCase();
@@ -202,6 +208,23 @@ try {
 
   // Click "Try $MESSY" and wait for the result.
   await dPage.click(`.sample-btn[data-address="${MESSY}"]`);
+  // Loading state (GoPlus fixture is delayed ~2.5s, so this is observable):
+  // Cancel must be visible without scrolling, and both data steps must
+  // show as in-progress while the fetches run (26 Nov 2026: the button
+  // was below the fold and the steps never ticked).
+  const cancelBtn = dPage.locator('[data-action="cancel-check"]');
+  await cancelBtn.waitFor({ state: "visible", timeout: 5000 });
+  const cancelBox = await cancelBtn.boundingBox();
+  check(
+    "desktop: Cancel button visible without scrolling",
+    !!cancelBox && cancelBox.y >= 0 && cancelBox.y + cancelBox.height <= 900,
+    cancelBox ? `y=${Math.round(cancelBox.y)} h=${Math.round(cancelBox.height)}` : "no bounding box",
+  );
+  check(
+    "desktop: loading steps tick while fetching",
+    (await dPage.locator('.loading-steps li[data-step="dexscreener"].is-active').count()) === 1 &&
+      (await dPage.locator('.loading-steps li[data-step="goplus"].is-active').count()) === 1,
+  );
   await dPage.waitForSelector(".result", { timeout: 120000 });
   await dPage.waitForTimeout(1500); // let the dial/bar animations settle
   const dVerdict = (await dPage.textContent(".dial-verdict-label"))?.trim();
@@ -211,6 +234,24 @@ try {
   check(
     "desktop: factor bars render (3 factors)",
     (await dPage.locator(".factor").count()) === 3,
+  );
+  // Factors subtitle must show EARNED points, not maxima (26 Nov 2026:
+  // BRETT showed "Holder 25" = max, not the earned 18, so 60+25+15=100
+  // while the score was 93).
+  const dSubtitle =
+    (await dPage.locator(".factors .section-sub").first().textContent())?.trim() ?? "";
+  const dFactorScores = await dPage.locator(".factor-score").allTextContents();
+  const dEarned = dFactorScores.map((t) => Number(t.split("/")[0].trim()));
+  const dSubNums = [...dSubtitle.matchAll(/(\d+)/g)].map((m) => Number(m[1]));
+  check(
+    "desktop: factors subtitle shows earned points",
+    dSubNums.length === 5 &&
+      dSubNums[0] === dEarned[0] &&
+      dSubNums[1] === dEarned[1] &&
+      dSubNums[2] === dEarned[2] &&
+      dSubNums[3] === Number(dScore) &&
+      dSubNums[4] === 100,
+    `subtitle "${dSubtitle}" vs factors ${dEarned.join("+")} total ${dScore}`,
   );
   const dBadge = await dPage.locator(".route-badge").count();
   const dAiUnavailable = await dPage.locator(".ai-unavailable").count();

@@ -130,23 +130,28 @@ export function renderEmptyState(container) {
     </div>`;
 }
 
-/** Loading state — step list keeps the wait legible. `onCancel` (optional) wires the Cancel button. */
+/** Loading state — step list keeps the wait legible. `onCancel` (optional) wires the Cancel button.
+ * The Cancel button sits in the header row (next to the title), not at
+ * the bottom of the card — 26 Nov 2026 live test: at 1920×998 it was
+ * below the fold and the tester had to scroll to find it. */
 export function renderLoading(container, address, { onCancel } = {}) {
   if (!container) return;
   container.innerHTML = `
     <div class="state-box state-loading">
       <div class="spinner" aria-hidden="true"></div>
-      <div>
-        <h2>Checking ${esc(shortAddress(address))}…</h2>
+      <div class="loading-main">
+        <div class="loading-head">
+          <h2>Checking ${esc(shortAddress(address))}…</h2>
+          <button type="button" class="btn-secondary" data-action="cancel-check">Cancel check</button>
+        </div>
         <p>Fetching live market data, contract safety and holder data, then scoring locally.</p>
         <ul class="loading-steps">
-          <li>Dexscreener — pairs, liquidity, volume</li>
-          <li>GoPlus — contract flags, taxes, holders</li>
-          <li>Local score — Protocol 60 · Holder 25 · Liquidity 15</li>
-          <li>AI explanation — on-device Nano first, cloud fallback</li>
+          <li data-step="dexscreener">Dexscreener — pairs, liquidity, volume</li>
+          <li data-step="goplus">GoPlus — contract flags, taxes, holders</li>
+          <li data-step="score">Local score — Protocol 60 · Holder 25 · Liquidity 15</li>
+          <li data-step="ai">AI explanation — on-device Nano first, cloud fallback</li>
         </ul>
-        <p class="loading-note">Usually under a minute. Each step gives up after its own timeout — if the check is still running after a few minutes, cancel and retry.</p>
-        <button type="button" class="btn-secondary" data-action="cancel-check">Cancel check</button>
+        <p class="loading-note">Usually under a minute — the AI explanation can take a little longer on a slow connection. Each step has its own timeout, so a check never hangs forever; if it does run long, cancel and retry.</p>
       </div>
     </div>`;
   container
@@ -154,6 +159,22 @@ export function renderLoading(container, address, { onCancel } = {}) {
     ?.addEventListener("click", () => {
       if (typeof onCancel === "function") onCancel();
     });
+}
+
+/**
+ * Mark one loading step as "active" (in progress) or "done".
+ * No-op when the loading state is gone (cancelled / finished / errored)
+ * — the step list is replaced together with the rest of the state box.
+ */
+export function markLoadingStep(container, step, state) {
+  if (!container) return;
+  const li = container.querySelector(
+    `.loading-steps li[data-step="${step}"]`,
+  );
+  if (!li) return;
+  li.classList.remove("is-active", "is-done");
+  if (state === "active") li.classList.add("is-active");
+  else if (state === "done") li.classList.add("is-done");
 }
 
 /**
@@ -395,7 +416,7 @@ export function renderResult(container, result) {
 
     <section class="card factors" aria-labelledby="factors-title">
       <h2 id="factors-title">How the score breaks down</h2>
-      <p class="section-sub">Protocol 60 · Holder 25 · Liquidity 15 — every point is accounted for below.</p>
+      <p class="section-sub">Protocol ${score.protocol} · Holder ${score.holder} · Liquidity ${score.liquidity} — total ${score.total} / 100, every point accounted for below.</p>
       ${factorSection("Protocol", 60, score.protocol, 60, reasonsByFactor.protocol)}
       ${factorSection("Holder", 25, score.holder, 25, reasonsByFactor.holder)}
       ${factorSection("Liquidity", 15, score.liquidity, 15, reasonsByFactor.liquidity)}
