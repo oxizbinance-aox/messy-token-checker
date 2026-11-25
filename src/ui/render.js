@@ -140,6 +140,7 @@ function renderAiDiagnostics(diag) {
   if (diag.probeLine) lines.unshift(diag.probeLine);
   const bodyLines = [
     `mode: ${diag.mode ?? "n/a"}`,
+    `model: ${diag.model ?? "n/a"}`,
     `outcome: ${diag.outcome ?? "n/a"}`,
   ];
   // "stalled at" only means something on a failed attempt — on success
@@ -188,7 +189,7 @@ export function renderLoading(container, address, { onCancel } = {}) {
         <ul class="loading-steps">
           <li data-step="dexscreener">Dexscreener — pairs, liquidity, volume</li>
           <li data-step="goplus">GoPlus — contract flags, taxes, holders</li>
-          <li data-step="score">Local score — Protocol 60 · Holder 25 · Liquidity 15</li>
+          <li data-step="score">Local score — protocol, holders, liquidity</li>
           <li data-step="ai">AI explanation — on-device Nano first, cloud fallback</li>
         </ul>
         <p class="loading-note">Usually under a minute — the AI explanation can take a little longer on a slow connection. Each step has its own timeout, so a check never hangs forever; if it does run long, cancel and retry.</p>

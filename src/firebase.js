@@ -35,6 +35,28 @@ export let ai = null;
 export let appCheck = null;
 
 /**
+ * Format the "(token expires in Ns)" parenthetical for an [ai-timing]
+ * line from an expireTimeMillis value — or "" when it is absent.
+ *
+ * Round-5 fix (26 Nov 2026): the live diagnostics showed
+ * "token expires in NaNs". Verified in the installed SDK source
+ * (@firebase/app-check, getToken at index.esm.js:1626): the PUBLIC
+ * getToken() returns ONLY `{ token }` — no expireTimeMillis — so the
+ * old code computed (undefined − Date.now()) / 1000 = NaN, and
+ * Math.max(0, NaN) is NaN too. Pure function, so Node tests cover it.
+ *
+ * @param {number|undefined|null} expireTimeMillis
+ * @returns {string} "" or "(token expires in 3599s)"
+ */
+export function tokenExpiryNote(expireTimeMillis) {
+  if (typeof expireTimeMillis !== "number" || !Number.isFinite(expireTimeMillis)) {
+    return "";
+  }
+  const ttlS = Math.max(0, Math.round((expireTimeMillis - Date.now()) / 1000));
+  return `(token expires in ${ttlS}s)`;
+}
+
+/**
  * Fetch an App Check token explicitly, with per-phase timing.
  *
  * Round 3 diagnosis (26 Nov 2026): the cloud AI call started timing out
@@ -50,7 +72,11 @@ export let appCheck = null;
  * reports its own error.
  *
  * @param {{ mark: (name: string, extra?: string) => number } | null} [timer]
- * @returns {Promise<{ token: string, expireTimeMillis: number } | null>}
+ * @returns {Promise<{ token: string } | null>}
+ *   NOTE: the public getToken() returns only { token } — no
+ *   expireTimeMillis (see tokenExpiryNote above) — so this returns the
+ *   token alone; the caller only needs the token to be fetched (the
+ *   SDK caches it for generateContent).
  */
 export async function prefetchAppCheckToken(timer = null) {
   if (!appCheck) {
@@ -59,12 +85,8 @@ export async function prefetchAppCheckToken(timer = null) {
   }
   timer?.mark("appcheck:getToken start");
   const { token, expireTimeMillis } = await getToken(appCheck);
-  const ttlS = Math.max(
-    0,
-    Math.round((expireTimeMillis - Date.now()) / 1000),
-  );
-  timer?.mark("appcheck:getToken ok", `(token expires in ${ttlS}s)`);
-  return { token, expireTimeMillis };
+  timer?.mark("appcheck:getToken ok", tokenExpiryNote(expireTimeMillis));
+  return { token };
 }
 
 let initialized = false;

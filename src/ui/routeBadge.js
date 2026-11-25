@@ -7,7 +7,7 @@
  * so honestly ("likely …") instead of claiming certainty we don't have.
  */
 
-import { ROUTE_ON_DEVICE, ROUTE_IN_CLOUD } from "../ai/hybrid.js";
+import { ROUTE_ON_DEVICE, ROUTE_IN_CLOUD, CLOUD_MODEL_DISPLAY } from "../ai/hybrid.js";
 
 /** Escape user/AI-controlled text before injecting it into HTML. */
 export function esc(value) {
@@ -31,9 +31,12 @@ export function renderRouteBadge(container, route, routeCertain) {
   if (!container) return;
   const onDevice =
     route === ROUTE_ON_DEVICE || route === "likely on-device";
+  // The cloud label is derived from CLOUD_MODEL_DISPLAY (the actual
+  // model in use), never hard-coded — a model switch must never leave
+  // a stale name in the badge.
   const label = onDevice
     ? "On-device · Gemini Nano"
-    : "In the cloud · Gemini 3.8 Flash";
+    : `In the cloud · ${CLOUD_MODEL_DISPLAY}`;
   const cls = onDevice ? "route-on-device" : "route-in-cloud";
   const certainNote =
     routeCertain === false

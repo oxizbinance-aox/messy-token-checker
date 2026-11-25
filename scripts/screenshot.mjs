@@ -289,6 +289,20 @@ try {
     dDiagText.includes("stalled at:"),
     dDiagText.slice(0, 160).replace(/\s+/g, " "),
   );
+  // Round 5: the cloud model is gemini-3.5-flash-lite (500/day free
+  // tier) — the diagnostics block must name it, so the live re-test
+  // can prove which model ran even when the AI call fails (no badge
+  // renders on failure). And no stale "3.8 Flash" text may remain
+  // anywhere on the page.
+  check(
+    "desktop: diagnostics block names the cloud model (Flash-Lite)",
+    dDiagText.includes("model: gemini-3.5-flash-lite"),
+    dDiagText.slice(0, 160).replace(/\s+/g, " "),
+  );
+  check(
+    "desktop: no stale '3.8 Flash' text anywhere on the page",
+    !(await dPage.locator("body").innerText()).includes("3.8 Flash"),
+  );
   await dPage.screenshot({
     path: path.join(shotsDir, "desktop-messy.png"),
     fullPage: true,
@@ -324,6 +338,14 @@ try {
   check(
     "mobile: AI diagnostics block present in the AI card",
     (await mPage.locator('[data-testid="ai-diagnostics"]').count()) === 1,
+  );
+  // Round 5: the diagnostics block must name the Flash-Lite model.
+  const mDiagText =
+    (await mPage.locator('[data-testid="ai-diagnostics"]').first().textContent()) ?? "";
+  check(
+    "mobile: diagnostics block names the cloud model (Flash-Lite)",
+    mDiagText.includes("model: gemini-3.5-flash-lite"),
+    mDiagText.slice(0, 160).replace(/\s+/g, " "),
   );
   await mPage.screenshot({
     path: path.join(shotsDir, "mobile-messy.png"),

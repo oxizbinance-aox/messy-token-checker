@@ -81,20 +81,25 @@ export function phaseOfLine(line) {
  *   (prompt build failed / model missing).
  * @param {object} [opts]
  * @param {string|null} [opts.mode] — "cloud-only" | "hybrid"
+ * @param {string|null} [opts.model] — cloud model ID that ran
+ *   (e.g. "gemini-3.5-flash-lite"); shown so the diagnostics block
+ *   proves which model produced the result (round 5: the badge only
+ *   renders on AI success, and the sandbox can never succeed)
  * @param {string} [opts.outcome] — "ok" | "error" | "skipped"
  * @param {string|null} [opts.error] — raw error message, if the attempt failed
  * @param {string|null} [opts.probeLine] — the "[ai-timing probe] ..." line
  *   for this check's Nano probe, if it resolved (from checkNanoAvailability)
- * @returns {{ label: string|null, mode: string|null, outcome: string,
- *   error: string|null, lines: string[], lastPhase: string|null,
- *   probeLine: string|null }}
+ * @returns {{ label: string|null, mode: string|null, model: string|null,
+ *   outcome: string, error: string|null, lines: string[],
+ *   lastPhase: string|null, probeLine: string|null }}
  */
-export function buildAiDiagnostics(timer, { mode = null, outcome = "unknown", error = null, probeLine = null } = {}) {
+export function buildAiDiagnostics(timer, { mode = null, model = null, outcome = "unknown", error = null, probeLine = null } = {}) {
   const lines = timer?.lines ? [...timer.lines] : [];
   const last = lines[lines.length - 1];
   return {
     label: timer?.label ?? null,
     mode,
+    model,
     outcome,
     error: error != null ? String(error) : null,
     lines,

@@ -122,8 +122,10 @@ check("hybrid.js exports getHybridModel/getCloudOnlyModel/ensureDeviceModel/expl
     assert.equal(typeof hybrid[name], "function", `missing ${name}`);
   }
 });
-check("hybrid.js pins cloud model gemini-3.8-flash", () =>
-  assert.equal(hybrid.CLOUD_MODEL, "gemini-3.8-flash"));
+check("hybrid.js pins cloud model gemini-3.5-flash-lite (round 5)", () => {
+  assert.equal(hybrid.CLOUD_MODEL, "gemini-3.5-flash-lite");
+  assert.equal(hybrid.CLOUD_MODEL_DISPLAY, "Gemini 3.5 Flash-Lite");
+});
 
 // 6. firebase.js — imports cleanly in Node (App Check skipped, no window);
 //    initFirebase() runs at import: initializeApp + getAI, no network.
@@ -135,6 +137,18 @@ check("firebase.js exports app/ai/initFirebase", () => {
 });
 check("firebase.js exports prefetchAppCheckToken (round-3 diagnosis)", () =>
   assert.equal(typeof fb.prefetchAppCheckToken, "function"));
+check("firebase.js exports tokenExpiryNote (round-5 NaN guard)", () =>
+  assert.equal(typeof fb.tokenExpiryNote, "function"));
+check("tokenExpiryNote prints a real TTL, omits it when expiry is absent", () => {
+  // Finite expiry ~3599s out → "(token expires in 3599s)".
+  assert.equal(fb.tokenExpiryNote(Date.now() + 3599_000), "(token expires in 3599s)");
+  // The public getToken() returns only { token } — no expireTimeMillis —
+  // so undefined/NaN must yield "" and NEVER "NaNs" (26 Nov 2026 live bug).
+  assert.equal(fb.tokenExpiryNote(undefined), "");
+  assert.equal(fb.tokenExpiryNote(null), "");
+  assert.equal(fb.tokenExpiryNote(NaN), "");
+  assert.equal(fb.tokenExpiryNote("3599"), "");
+});
 // check() is sync, so the async assertion runs directly (top-level await):
 assert.equal(await fb.prefetchAppCheckToken(), null);
 passed += 1;
@@ -192,11 +206,13 @@ check("buildAiDiagnostics snapshots lines + lastPhase + mode/outcome", () => {
   timer.mark("appcheck:getToken start");
   const diag = buildAiDiagnostics(timer, {
     mode: "cloud-only",
+    model: "gemini-3.5-flash-lite",
     outcome: "error",
     error: "The cloud AI request timed out after 90s.",
     probeLine: "[ai-timing probe] nano-probe status=unavailable +3ms",
   });
   assert.equal(diag.mode, "cloud-only");
+  assert.equal(diag.model, "gemini-3.5-flash-lite");
   assert.equal(diag.outcome, "error");
   assert.equal(diag.error, "The cloud AI request timed out after 90s.");
   assert.equal(diag.lastPhase, "appcheck:getToken");

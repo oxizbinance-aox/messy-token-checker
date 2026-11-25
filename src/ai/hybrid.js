@@ -18,12 +18,21 @@ import { getGenerativeModel, InferenceMode } from "firebase/ai";
 import { ai } from "../firebase.js";
 import { verdictSchema } from "./verdictSchema.js";
 
-// Cloud model pinned per parent verification (26 Nov 2026) against the
-// official Firebase AI Logic models page:
-// https://firebase.google.com/docs/ai-logic/models
-// `gemini-3.8-flash` is a STABLE model. Do NOT use the SDK v13 default
-// fallback (gemini-3.5-flash-lite) — we override it here on purpose.
-export const CLOUD_MODEL = "gemini-3.8-flash";
+// Cloud model (round 5, 26 Nov 2026 — switched from gemini-3.8-flash):
+// the free tier for gemini-3.8-flash is 20 requests/day/project and it
+// was EXHAUSTED the same day (proven by the round-4 on-page diagnostics:
+// HTTP 429, GenerateContentRequestsPerDayPerProjectPerModel-FreeTier,
+// limit 20, retry ~15:00 WIB). gemini-3.5-flash-lite has a 500/day
+// free tier in the SAME project (no billing, no new project) and each
+// model has its own quota counter, so the Lite allowance is fresh.
+// Google recommends Flash-Lite for new projects, and this model is the
+// SDK's own DEFAULT_HYBRID_IN_CLOUD_MODEL — the hybrid path (incl.
+// responseSchema structured output) is built for it.
+// `gemini-3.8-flash` is still a STABLE model, but 20/day cannot survive
+// judging; the Lite model is the one that keeps the app usable.
+export const CLOUD_MODEL = "gemini-3.5-flash-lite";
+/** Human-readable name of CLOUD_MODEL, shown in the route badge. */
+export const CLOUD_MODEL_DISPLAY = "Gemini 3.5 Flash-Lite";
 
 // Canonical route labels returned by explainVerdict(). The SDK's
 // InferenceSource enum values are lowercase ('on_device' / 'in_cloud');

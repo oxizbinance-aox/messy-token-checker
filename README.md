@@ -21,7 +21,7 @@ Two Gemini routes, one SDK — **Firebase AI Logic hybrid inference**:
 | Route | When it runs | Badge |
 |---|---|---|
 | **On-device — Gemini Nano** (`PREFER_ON_DEVICE`) | Chrome on Desktop v139+ with the Prompt API flag and the model downloaded | 🟢 On-device · Gemini Nano |
-| **In the cloud — Gemini 3.8 Flash** (automatic fallback) | Everywhere else, or while Nano is still downloading | 🔵 In the cloud · Gemini 3.8 Flash |
+| **In the cloud — Gemini 3.5 Flash-Lite** (automatic fallback) | Everywhere else, or while Nano is still downloading | 🔵 In the cloud · Gemini 3.5 Flash-Lite |
 
 Every result carries a visible route badge, so you can see which path ran.
 While Nano downloads, a progress bar shows the download and a

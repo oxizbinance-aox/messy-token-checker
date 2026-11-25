@@ -41,6 +41,7 @@ import { withTimeout } from "./data/http.js";
 import { scoreToken } from "./scoring.js";
 import { buildVerdictPrompt } from "./ai/prompts.js";
 import {
+  CLOUD_MODEL,
   getHybridModel,
   getCloudOnlyModel,
   ensureDeviceModel,
@@ -207,6 +208,7 @@ function captureAiDiagnostics(seq, outcome, error) {
       : null;
   return buildAiDiagnostics(lastAiTimer, {
     mode: lastAiTimer?.mode ?? null,
+    model: CLOUD_MODEL,
     outcome,
     error,
     probeLine,
