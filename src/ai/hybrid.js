@@ -93,6 +93,11 @@ export function getCloudOnlyModel() {
  * to onProgress for the UI progress bar.
  * MUST run on user activation and BEFORE generateContent.
  *
+ * Safety bound (26 Nov 2026 live test: the download bar sat at 0% for the
+ * whole session while the SDK neither resolved nor rejected): the init is
+ * raced against a 120s timeout so it can never hang forever — the caller
+ * hides the bar and the check falls back to cloud.
+ *
  * @param {import("firebase/ai").GenerativeModel} model
  * @param {(progress: number) => void} [onProgress]
  */
@@ -102,18 +107,37 @@ export async function ensureDeviceModel(model, onProgress) {
       "[hybrid] ensureDeviceModel: expected a GenerativeModel with initializeDeviceModel().",
     );
   }
-  try {
-    await model.initializeDeviceModel((progress) => {
-      const p =
-        typeof progress === "number" && Number.isFinite(progress)
-          ? Math.min(1, Math.max(0, progress))
-          : 0;
-      if (typeof onProgress === "function") onProgress(p);
-    });
-  } catch (err) {
-    throw new Error(
-      `[hybrid] On-device model download/initialization failed: ${err?.message || err}`,
+  const init = (async () => {
+    try {
+      await model.initializeDeviceModel((progress) => {
+        const p =
+          typeof progress === "number" && Number.isFinite(progress)
+            ? Math.min(1, Math.max(0, progress))
+            : 0;
+        if (typeof onProgress === "function") onProgress(p);
+      });
+    } catch (err) {
+      throw new Error(
+        `[hybrid] On-device model download/initialization failed: ${err?.message || err}`,
+      );
+    }
+  })();
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            "[hybrid] On-device model download timed out after 120s — cloud fallback will run.",
+          ),
+        ),
+      120_000,
     );
+  });
+  try {
+    await Promise.race([init, timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

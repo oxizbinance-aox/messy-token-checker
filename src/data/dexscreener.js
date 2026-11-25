@@ -10,9 +10,14 @@
  * `{"pairs": [...]}`. Both shapes are handled here.
  */
 
+import { fetchWithTimeout, TimeoutError } from "./http.js";
+
 const API_BASE = "https://api.dexscreener.com/token-pairs/v1/base";
 
-/** Typed error: `.kind` is one of 'invalid-address' | 'not-found' | 'network' | 'rate-limit'. */
+/** A Dexscreener request is abandoned after this long (live test, 26 Nov 2026: a BRETT check hung 3.5+ min with no timeout). */
+export const DEXSCREENER_TIMEOUT_MS = 20_000;
+
+/** Typed error: `.kind` is one of 'invalid-address' | 'not-found' | 'network' | 'rate-limit' | 'timeout'. */
 export class DexscreenerError extends Error {
   constructor(kind, message) {
     super(message);
@@ -35,6 +40,8 @@ function toNum(v) {
  * Fetch all Dexscreener pairs for a Base token and normalise them.
  *
  * @param {string} address - token contract address (any case; checksummed or not)
+ * @param {object} [opts]
+ * @param {AbortSignal} [opts.signal] — external abort (the check's Cancel button)
  * @returns {Promise<{
  *   pairs: object[], bestPair: object, totalLiquidityUsd: number,
  *   totalVolumeH24: number, totalTxnsH24: {buys:number, sells:number},
@@ -43,9 +50,9 @@ function toNum(v) {
  *   websites: object[], socials: object[],
  *   priceUsd: number|null, marketCap: number|null, fdv: number|null
  * }>}
- * @throws {DexscreenerError} with .kind 'invalid-address' | 'not-found' | 'network' | 'rate-limit'
+ * @throws {DexscreenerError} with .kind 'invalid-address' | 'not-found' | 'network' | 'rate-limit' | 'timeout'
  */
-export async function fetchTokenPairs(address) {
+export async function fetchTokenPairs(address, { signal } = {}) {
   if (!isValidAddress(address)) {
     throw new DexscreenerError(
       "invalid-address",
@@ -55,8 +62,17 @@ export async function fetchTokenPairs(address) {
 
   let res;
   try {
-    res = await fetch(`${API_BASE}/${address}`);
+    res = await fetchWithTimeout(`${API_BASE}/${address}`, {
+      timeoutMs: DEXSCREENER_TIMEOUT_MS,
+      signal,
+    });
   } catch (err) {
+    if (err instanceof TimeoutError) {
+      throw new DexscreenerError(
+        "timeout",
+        `Dexscreener did not answer within ${DEXSCREENER_TIMEOUT_MS / 1000}s — the data source is slow or unreachable right now`,
+      );
+    }
     throw new DexscreenerError(
       "network",
       `Dexscreener request failed: ${err?.message ?? String(err)}`,

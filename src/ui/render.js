@@ -130,8 +130,8 @@ export function renderEmptyState(container) {
     </div>`;
 }
 
-/** Loading state — step list keeps the wait legible. */
-export function renderLoading(container, address) {
+/** Loading state — step list keeps the wait legible. `onCancel` (optional) wires the Cancel button. */
+export function renderLoading(container, address, { onCancel } = {}) {
   if (!container) return;
   container.innerHTML = `
     <div class="state-box state-loading">
@@ -145,8 +145,15 @@ export function renderLoading(container, address) {
           <li>Local score — Protocol 60 · Holder 25 · Liquidity 15</li>
           <li>AI explanation — on-device Nano first, cloud fallback</li>
         </ul>
+        <p class="loading-note">Usually under a minute. Each step gives up after its own timeout — if the check is still running after a few minutes, cancel and retry.</p>
+        <button type="button" class="btn-secondary" data-action="cancel-check">Cancel check</button>
       </div>
     </div>`;
+  container
+    .querySelector('[data-action="cancel-check"]')
+    ?.addEventListener("click", () => {
+      if (typeof onCancel === "function") onCancel();
+    });
 }
 
 /**
@@ -161,6 +168,7 @@ export function renderError(container, { kind, message, address }) {
     "invalid-address": "That doesn't look like a token address",
     "not-found": "No trading pairs found for this address",
     "rate-limit": "Dexscreener is rate-limiting us right now",
+    timeout: "The data source took too long to respond",
     network: "Couldn't reach the data source",
     unknown: "Something went wrong",
   };
@@ -189,6 +197,10 @@ export function renderError(container, { kind, message, address }) {
       <p>Dexscreener allows 60 requests a minute and we're over it.
       Wait about a minute and tap Check again — your address is still in
       the box.</p>`,
+    timeout: `
+      <p>${esc(message ?? "Dexscreener didn't answer within 20 seconds.")}</p>
+      <p>The data source is slow or unreachable right now — this is usually
+      temporary. Tap Check again — your address is still in the box.</p>`,
     network: `
       <p>${esc(message ?? "The request failed before it reached the data source.")}</p>
       <p>Check your connection and try again.</p>`,

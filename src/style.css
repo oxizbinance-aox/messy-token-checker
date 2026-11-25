@@ -560,6 +560,14 @@ input {
   color: var(--pink-soft);
   font-weight: 700;
 }
+.loading-note {
+  margin: 12px 0 0;
+  font-size: 13.5px;
+  color: var(--text-muted);
+}
+.state-loading .btn-secondary {
+  margin-top: 14px;
+}
 
 .empty-state {
   text-align: center;

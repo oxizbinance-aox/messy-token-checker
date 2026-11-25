@@ -92,6 +92,17 @@ export function scoreToken({ pairs = null, goplus = null } = {}) {
   const sellRatio = totalTxns > 0 ? sells / totalTxns : null;
   const pairAgeMs = pairs?.pairAgeMs ?? null;
   const pairAgeDays = pairAgeMs != null ? pairAgeMs / 86_400_000 : null;
+  // ONE canonical display value for the pair age (26 Nov 2026 live test:
+  // the breakdown said "461 days" while the AI text said "460 days").
+  // Old pairs (>90d) round to a whole number; young pairs keep one decimal.
+  // The breakdown reason AND the AI prompt both use this value, so they
+  // can never disagree again. fmtAge() in render.js rounds the same way.
+  const pairAgeDaysDisplay =
+    pairAgeDays == null
+      ? null
+      : pairAgeDays > 90
+        ? Math.round(pairAgeDays)
+        : +pairAgeDays.toFixed(1);
   const websites = pairs?.websites ?? [];
   const socials = pairs?.socials ?? [];
   const buyTax = gp ? parseFloat(gp.buy_tax) : NaN;
@@ -112,6 +123,7 @@ export function scoreToken({ pairs = null, goplus = null } = {}) {
     sellRatio,
     pairAgeMs,
     pairAgeDays,
+    pairAgeDaysDisplay,
     priceUsd: pairs?.priceUsd ?? null,
     marketCap: pairs?.marketCap ?? null,
     fdv: pairs?.fdv ?? null,
@@ -206,7 +218,7 @@ export function scoreToken({ pairs = null, goplus = null } = {}) {
     deduct(`Pair is new (${pairAgeDays.toFixed(1)} days old, <7d)`, -4);
   } else if (pairAgeDays > 90) {
     protocolDelta += 3;
-    add("protocol", `Pair is established (${Math.round(pairAgeDays)} days old, >90d)`, 3);
+    add("protocol", `Pair is established (${pairAgeDaysDisplay} days old, >90d)`, 3);
   }
 
   // Website / socials present.

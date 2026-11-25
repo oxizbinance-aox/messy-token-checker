@@ -15,8 +15,13 @@
  * are the mitigation (RESEARCH.md §6d gap 4).
  */
 
+import { fetchWithTimeout, TimeoutError } from "./http.js";
+
 const API_BASE = "https://api.gopluslabs.io/api/v1/token_security/8453"; // 8453 = Base
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/** A GoPlus request is abandoned after this long (same stall as Dexscreener, 26 Nov 2026). */
+export const GOPLUS_TIMEOUT_MS = 20_000;
 
 /** address (lowercased) -> { data, fetchedAt } */
 const cache = new Map();
@@ -41,9 +46,14 @@ function toInt(v) {
  *
  * @param {string} address - token contract address (lowercased internally;
  *   GoPlus keys its `result` object by the lowercased address)
+ * @param {object} [opts]
+ * @param {AbortSignal} [opts.signal] — external abort (the check's Cancel button)
  * @returns {Promise<object>} On success `{ available: true, ...parsed }`;
  *   on ANY failure `{ available: false, error: <message> }` — never throws
  *   for fetch/HTTP/parse problems.
+ *
+ * A timeout is a degradation, not a crash: the caller still scores from
+ * Dexscreener data and caps SAFE at WATCH (see main.js).
  *
  * Parsed success shape (raw GoPlus flags are "0"/"1" strings; taxes and
  * holder percents are decimal strings, e.g. "0.049" = 4.9%):
@@ -62,7 +72,7 @@ function toInt(v) {
  *   raw,                           // the untouched GoPlus entry
  * }
  */
-export async function fetchTokenSecurity(address) {
+export async function fetchTokenSecurity(address, { signal } = {}) {
   const key = typeof address === "string" ? address.toLowerCase() : "";
   if (!/^0x[0-9a-fA-F]{40}$/.test(key)) {
     return { available: false, error: `Invalid token address: ${String(address)}` };
@@ -75,8 +85,17 @@ export async function fetchTokenSecurity(address) {
 
   let res;
   try {
-    res = await fetch(`${API_BASE}?contract_addresses=${key}`);
+    res = await fetchWithTimeout(`${API_BASE}?contract_addresses=${key}`, {
+      timeoutMs: GOPLUS_TIMEOUT_MS,
+      signal,
+    });
   } catch (err) {
+    if (err instanceof TimeoutError) {
+      return {
+        available: false,
+        error: `GoPlus timed out after ${GOPLUS_TIMEOUT_MS / 1000}s — security data temporarily unavailable`,
+      };
+    }
     return { available: false, error: `GoPlus request failed: ${err?.message ?? String(err)}` };
   }
 

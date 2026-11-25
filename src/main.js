@@ -30,6 +30,7 @@ import "./style.css";
 import "./firebase.js"; // eager initFirebase() on import
 import { fetchTokenPairs, isValidAddress, DexscreenerError } from "./data/dexscreener.js";
 import { fetchTokenSecurity } from "./data/goplus.js";
+import { withTimeout } from "./data/http.js";
 import { scoreToken } from "./scoring.js";
 import { buildVerdictPrompt } from "./ai/prompts.js";
 import {
@@ -75,6 +76,62 @@ let lastPrompt = null;
 
 let checking = false;
 
+/**
+ * Timeouts that bound the whole check (26 Nov 2026 live test: a BRETT
+ * check hung at "Checking…" for 3.5+ minutes with no timeout, no error
+ * and no way out — every stage was unbounded).
+ * - Each data source gives up after 20s (see src/data/dexscreener.js,
+ *   src/data/goplus.js).
+ * - Each AI attempt gives up after 90s (hybrid, then cloud retry).
+ * - The whole check gives up after 4 minutes, whatever stage it is in.
+ * - The Nano availability probe gets 5s before we decide about the
+ *   download bar (it is a local API call and normally resolves in ms).
+ */
+const AI_TIMEOUT_MS = 90_000;
+const NANO_STATUS_TIMEOUT_MS = 5_000;
+const OVERALL_CHECK_TIMEOUT_MS = 240_000;
+
+/** Sequence number of the current check — stale continuations bail out. */
+let checkSeq = 0;
+/** AbortController of the current check's data fetches (Cancel button). */
+let currentAbort = null;
+/** Overall-check watchdog timer (cleared on every exit path). */
+let overallTimer = null;
+
+/** Reset the check button / checking flag and clear the watchdog. */
+function finishCheck() {
+  if (overallTimer) {
+    clearTimeout(overallTimer);
+    overallTimer = null;
+  }
+  checking = false;
+  checkBtn.disabled = false;
+  checkBtn.textContent = "Check token";
+}
+
+/**
+ * Cancel the running check (Cancel button, or the overall watchdog).
+ * Aborts the data fetches and invalidates every in-flight continuation
+ * via checkSeq, so no late result can render over the reset UI.
+ * `reason` "timeout" shows the timeout error state; anything else shows
+ * the empty state.
+ */
+function cancelCheck(reason) {
+  currentAbort?.abort();
+  checkSeq++;
+  hideDownloadProgress();
+  finishCheck();
+  resultsEl.innerHTML = "";
+  if (reason === "timeout") {
+    renderError(statusEl, {
+      kind: "timeout",
+      message: "The check took longer than 4 minutes overall — something stalled. Try again.",
+    });
+  } else {
+    renderEmptyState(statusEl);
+  }
+}
+
 /* ------------------------------------------------------- Nano status chip */
 
 /** Refresh the Nano chip. Never throws, never blocks the check. */
@@ -114,7 +171,16 @@ async function runCheck(address) {
   checkBtn.disabled = true;
   checkBtn.textContent = "Checking…";
   resultsEl.innerHTML = "";
-  renderLoading(statusEl, addr);
+  renderLoading(statusEl, addr, { onCancel: () => cancelCheck("user") });
+
+  // This check's identity: the Cancel button / watchdog invalidate it by
+  // bumping checkSeq, and every continuation below bails out on mismatch.
+  const mySeq = ++checkSeq;
+  const abort = new AbortController();
+  currentAbort = abort;
+  overallTimer = setTimeout(() => {
+    if (mySeq === checkSeq) cancelCheck("timeout");
+  }, OVERALL_CHECK_TIMEOUT_MS);
 
   // 3. Nano status — fire and forget, never blocks the check.
   const nanoPromise = refreshNanoChip();
@@ -134,31 +200,55 @@ async function runCheck(address) {
     model = null;
   }
 
-  // Fire the device-model download WITHOUT awaiting it. Progress feeds
-  // the bar; a failure just means the request falls back to cloud.
+  // Fire the device-model download WITHOUT awaiting it — but ONLY when
+  // Nano can actually run in this browser. Live test 26 Nov 2026: the
+  // bar sat at 0% for the whole session in a browser where Nano is
+  // unavailable, because initializeDeviceModel never resolved, rejected
+  // or called back. "available" still needs the init call before
+  // generateContent, but shows no bar (nothing to download);
+  // "downloading"/"downloadable" show the bar; "unavailable" skips the
+  // download entirely and the check falls back to cloud.
   if (model && !useCloudOnly) {
-    showDownloadProgress();
-    ensureDeviceModel(model, (progress) => {
-      setDownloadProgress(progress);
-      if (progress >= 1) hideDownloadProgress();
-    }).catch((err) => {
-      console.warn("[check] ensureDeviceModel failed (cloud fallback will run):", err);
-      hideDownloadProgress();
-    });
+    const nano = await Promise.race([
+      nanoPromise,
+      new Promise((resolve) =>
+        setTimeout(() => resolve({ status: "unavailable" }), NANO_STATUS_TIMEOUT_MS),
+      ),
+    ]);
+    if (
+      nano?.status === "available" ||
+      nano?.status === "downloading" ||
+      nano?.status === "downloadable"
+    ) {
+      if (nano.status !== "available") showDownloadProgress();
+      ensureDeviceModel(model, (progress) => {
+        setDownloadProgress(progress);
+        if (progress >= 1) hideDownloadProgress();
+      })
+        .then(() => hideDownloadProgress())
+        .catch((err) => {
+          console.warn("[check] ensureDeviceModel failed (cloud fallback will run):", err);
+          hideDownloadProgress();
+        });
+    }
   }
 
-  // 5. Fetch Dexscreener + GoPlus in parallel.
+  // 5. Fetch Dexscreener + GoPlus in parallel. Each source has its own
+  //    20s timeout; the Cancel button aborts both via the signal.
+  //    Dexscreener failing/timing out is a hard error (no market data =
+  //    no score); GoPlus failing/timing out degrades gracefully — the
+  //    score is computed from Dexscreener data and SAFE is capped at
+  //    WATCH (fetchTokenSecurity never throws).
   let pairs;
   let goplus;
   try {
     [pairs, goplus] = await Promise.all([
-      fetchTokenPairs(addr),
-      fetchTokenSecurity(addr),
+      fetchTokenPairs(addr, { signal: abort.signal }),
+      fetchTokenSecurity(addr, { signal: abort.signal }),
     ]);
   } catch (err) {
-    checking = false;
-    checkBtn.disabled = false;
-    checkBtn.textContent = "Check token";
+    if (mySeq !== checkSeq) return; // cancelled — UI already reset
+    finishCheck();
     hideDownloadProgress();
     const kind =
       err instanceof DexscreenerError
@@ -171,6 +261,7 @@ async function runCheck(address) {
     });
     return;
   }
+  if (mySeq !== checkSeq) return; // cancelled while fetching
 
   // 6. Score locally; apply the GoPlus-down cap.
   let score = scoreToken({ pairs, goplus });
@@ -230,9 +321,11 @@ async function runCheck(address) {
         ? +(score.metrics.sellTax * 100).toFixed(2)
         : null,
     pairAgeDays:
-      score.metrics?.pairAgeDays != null
-        ? +score.metrics.pairAgeDays.toFixed(1)
-        : null,
+      score.metrics?.pairAgeDaysDisplay != null
+        ? score.metrics.pairAgeDaysDisplay
+        : score.metrics?.pairAgeDays != null
+          ? +score.metrics.pairAgeDays.toFixed(1)
+          : null,
     honeypot: score.metrics?.isHoneypot ?? false,
     goplusAvailable: score.metrics?.goplusAvailable ?? false,
     cappedAtWatch: capped,
@@ -264,6 +357,7 @@ async function runCheck(address) {
     aiError =
       "The AI model could not be created in this browser (Firebase AI Logic is not initialized).";
   }
+  if (mySeq !== checkSeq) return; // cancelled while the AI was running
 
   // 8. Render + remember.
   statusEl.innerHTML = "";
@@ -294,9 +388,7 @@ async function runCheck(address) {
   // whenever it lands; nothing here depends on it.
   void nanoPromise;
 
-  checking = false;
-  checkBtn.disabled = false;
-  checkBtn.textContent = "Check token";
+  finishCheck();
   resultsEl.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -318,15 +410,30 @@ async function runCheck(address) {
  * @throws the last error seen (cloud error if the retry ran, else hybrid error)
  */
 async function runAi(prompt, cloudOnly, existingModel = null) {
+  // Each attempt is bounded (live test 26 Nov 2026: the check hung for
+  // 3.5+ min — a stalled generateContent would do the same). The Cancel
+  // button / overall watchdog still cover the whole check.
   if (cloudOnly) {
-    return explainVerdict(existingModel ?? getCloudOnlyModel(), prompt);
+    return withTimeout(
+      explainVerdict(existingModel ?? getCloudOnlyModel(), prompt),
+      AI_TIMEOUT_MS,
+      "The cloud AI request timed out after 90s.",
+    );
   }
   try {
-    return await explainVerdict(existingModel ?? getHybridModel(), prompt);
+    return await withTimeout(
+      explainVerdict(existingModel ?? getHybridModel(), prompt),
+      AI_TIMEOUT_MS,
+      "The AI request timed out after 90s.",
+    );
   } catch (hybridErr) {
     console.warn("[check] hybrid model failed, retrying with cloud-only:", hybridErr);
     try {
-      return await explainVerdict(getCloudOnlyModel(), prompt);
+      return await withTimeout(
+        explainVerdict(getCloudOnlyModel(), prompt),
+        AI_TIMEOUT_MS,
+        "The cloud AI request timed out after 90s.",
+      );
     } catch (cloudErr) {
       // The cloud error is usually the actionable one (App Check, network,
       // quota); keep it, but remember the hybrid failure in the message
@@ -367,12 +474,16 @@ function humanAiError(err) {
   if (/429|quota|RESOURCE_EXHAUSTED/i.test(msg)) {
     return "The cloud request hit a rate limit or quota — wait a minute and retry.";
   }
+  if (/timed out|timeout/i.test(msg)) {
+    return "The AI request timed out — the model was too slow to answer. The score above is unaffected; retry in a moment.";
+  }
   return msg;
 }
 
 /** Re-run ONLY the AI call for the current result (Retry button). */
 async function retryAi() {
   if (!currentResult || !lastPrompt) return;
+  const target = currentResult; // a new check starting meanwhile wins
   const aiCard = resultsEl.querySelector(".ai-card");
   if (aiCard) {
     aiCard.classList.add("ai-unavailable");
@@ -385,9 +496,11 @@ async function retryAi() {
   try {
     // Model creation again on this user interaction (Retry click).
     const ai = await runAi(lastPrompt, cloudToggle?.checked === true);
+    if (currentResult !== target) return; // a new check replaced the result
     currentResult = { ...currentResult, ai, aiError: null };
     renderResult(resultsEl, currentResult);
   } catch (err) {
+    if (currentResult !== target) return;
     currentResult = {
       ...currentResult,
       ai: null,
