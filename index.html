@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23ff4d8d'/%3E%3Ctext x='32' y='44' font-family='Arial,sans-serif' font-size='36' font-weight='bold' fill='white' text-anchor='middle'%3EM%3C/text%3E%3C/svg%3E"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Messy Token Checker — check before you buy. Free on-device + cloud hybrid AI due diligence for Base tokens. Score, verdict, red flags, plain-language AI explanation."
+    />
+    <title>Messy Token Checker — Check before you buy</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="site-header">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">M</span>
+          <span class="brand-name">Messy <em>Token Checker</em></span>
+        </div>
+        <a
+          class="header-link"
+          href="https://app.messyvirgo.com"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Full check on app.messyvirgo.com ↗
+        </a>
+      </header>
+
+      <main class="page">
+        <!-- HERO -->
+        <section class="hero" aria-labelledby="hero-title">
+          <p class="hero-eyebrow">Messy Virgo · Base chain · Free</p>
+          <h1 id="hero-title">
+            Check before <span class="accent">you buy.</span>
+          </h1>
+          <p class="hero-sub">
+            Paste any Base token contract address. Messy scores it
+            0–100 from live on-chain data — protocol safety, holder
+            concentration, liquidity — and explains the verdict in plain
+            language, on your device when possible, in the cloud when not.
+          </p>
+          <ul class="hero-points">
+            <li>
+              <span class="dot dot-safe" aria-hidden="true"></span>
+              Deterministic score — same data, same score, every time
+            </li>
+            <li>
+              <span class="dot dot-ai" aria-hidden="true"></span>
+              Hybrid AI: Gemini Nano on-device first, cloud fallback
+            </li>
+            <li>
+              <span class="dot dot-free" aria-hidden="true"></span>
+              Free — no wallet, no sign-up, no API key
+            </li>
+          </ul>
+        </section>
+
+        <!-- CHECKER -->
+        <section class="checker card" aria-labelledby="checker-title">
+          <h2 id="checker-title" class="sr-only">Check a token</h2>
+
+          <form id="check-form" novalidate>
+            <label class="field-label" for="address-input">
+              Token contract address <span class="field-hint">(Base)</span>
+            </label>
+            <div class="input-row">
+              <input
+                id="address-input"
+                name="address"
+                type="text"
+                inputmode="text"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="0x09f87f948c88848363b124c9099cbb58e4cc7cb6"
+                aria-describedby="input-help"
+              />
+              <button id="check-btn" type="submit" class="btn-primary">
+                Check token
+              </button>
+            </div>
+            <p id="input-help" class="field-help">
+              A Base token contract address — 0x followed by 40 hex
+              characters. Not a wallet address, not a pair address.
+            </p>
+          </form>
+
+          <div class="samples">
+            <span class="samples-label">Try one:</span>
+            <button
+              type="button"
+              class="chip sample-btn"
+              data-address="0x09f87f948c88848363b124c9099cbb58e4cc7cb6"
+            >
+              Try $MESSY
+            </button>
+            <button
+              type="button"
+              class="chip sample-btn"
+              data-address="0x532f27101965dd16442E59d40670FaF5eBB142E4"
+            >
+              Try BRETT
+            </button>
+            <span class="samples-note">
+              $MESSY scores ~66 (WATCH) · BRETT scores ~93 (SAFE)
+            </span>
+          </div>
+
+          <div class="ai-controls">
+            <div id="nano-chip" class="nano-chip" role="status">
+              <span class="nano-dot" aria-hidden="true"></span>
+              <span class="nano-text">Checking on-device AI…</span>
+            </div>
+            <label class="toggle">
+              <input id="cloud-toggle" type="checkbox" />
+              <span>Use cloud meanwhile</span>
+              <span class="toggle-hint">
+                skip the on-device download, go straight to cloud Gemini
+              </span>
+            </label>
+          </div>
+
+          <div
+            id="download-bar"
+            class="download-bar"
+            hidden
+            role="status"
+            aria-live="polite"
+          >
+            <div class="download-bar-label">
+              <span>Downloading on-device model (Gemini Nano)…</span>
+              <span id="download-pct">0%</span>
+            </div>
+            <div class="progress-track">
+              <div id="download-fill" class="progress-fill" style="width: 0%"></div>
+            </div>
+            <p class="download-note">
+              First run only — a few hundred MB. The check falls back to
+              cloud Gemini while it downloads, so you don't have to wait.
+            </p>
+          </div>
+        </section>
+
+        <!-- STATUS / EMPTY / ERROR / LOADING -->
+        <section id="status" aria-live="polite"></section>
+
+        <!-- RESULTS (rendered by src/ui/render.js) -->
+        <section id="results" aria-live="polite"></section>
+
+        <!-- RECENT CHECKS -->
+        <section id="recent-section" class="card" hidden>
+          <div class="section-head">
+            <h2>Recent checks</h2>
+            <button id="clear-recent" type="button" class="btn-ghost">
+              Clear
+            </button>
+          </div>
+          <ul id="recent-list" class="recent-list"></ul>
+        </section>
+
+        <!-- HOW IT WORKS -->
+        <section class="how card" aria-labelledby="how-title">
+          <h2 id="how-title">How the score works</h2>
+          <div class="how-grid">
+            <div>
+              <h3>Protocol · 60 pts</h3>
+              <p>
+                Contract safety from GoPlus: honeypot (auto-RUG),
+                verified source, mintable, hidden owner, self-destruct,
+                proxy, blacklist, taxes, deployer history — plus pair age
+                and website/socials from Dexscreener.
+              </p>
+            </div>
+            <div>
+              <h3>Holder · 25 pts</h3>
+              <p>
+                Top-10 holder concentration from GoPlus, plus holder count
+                and LP holders. ≤20% concentrated scores full marks;
+                &gt;80% scores zero.
+              </p>
+            </div>
+            <div>
+              <h3>Liquidity · 15 pts</h3>
+              <p>
+                Total liquidity across all Dexscreener pairs, 24h volume,
+                and buy/sell balance. ≥$100k liquidity scores full marks;
+                a dead pair scores zero.
+              </p>
+            </div>
+          </div>
+          <p class="bands">
+            <strong>Verdict bands:</strong>
+            <span class="verdict-word verdict-safe">SAFE ≥ 70</span> ·
+            <span class="verdict-word verdict-watch">WATCH 45–69</span> ·
+            <span class="verdict-word verdict-rug">RUG &lt; 45</span>
+          </p>
+          <p class="sources">
+            Data: Dexscreener (market + liquidity) and GoPlus Security
+            (contract + holders) — both free, keyless, live. The score is
+            computed locally by a deterministic rule engine; the AI only
+            explains it in plain language.
+          </p>
+          <details class="limits">
+            <summary>Honest limitations — read before you trust a score</summary>
+            <ul>
+              <li>
+                <strong>USDC, WETH and other quote tokens can't be checked.</strong>
+                Dexscreener's token-pairs endpoint only sees tokens that
+                are the <em>base</em> token of a pair — quote tokens return
+                no pairs at all. That's a data blind spot, not a bug.
+              </li>
+              <li>
+                <strong>Top-10 concentration is a proxy.</strong> The full
+                holder distribution is a paid endpoint; we score what free
+                data can see.
+              </li>
+              <li>
+                <strong>LP lock status can't be verified from free data.</strong>
+                We never invent a lock date. If the top LP holder is the
+                burn address we say so; otherwise we say it's unverifiable.
+              </li>
+              <li>
+                <strong>Ownership-renounced status can't be verified from
+                free data.</strong> Owner-risk flags are the closest proxy.
+              </li>
+              <li>
+                <strong>If GoPlus is down, a SAFE is capped at WATCH.</strong>
+                Without contract + holder data we won't call a token safe —
+                the score above stays computed, the verdict is capped until
+                the contract can be verified.
+              </li>
+              <li>
+                <strong>On-device AI needs Chrome on Desktop v139+</strong>
+                with the Prompt API flag enabled, and a one-time model
+                download. Everywhere else the cloud fallback runs instead.
+              </li>
+            </ul>
+          </details>
+        </section>
+
+        <footer class="site-footer">
+          <p>
+            Messy Token Checker — a #BuildHybridAI 2026 entry. Built with
+            Firebase AI Logic (Gemini Nano on-device + Gemini cloud).
+            Not financial advice — always do your own research.
+          </p>
+          <p>
+            Want the full Messy due diligence?
+            <a
+              href="https://app.messyvirgo.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              >app.messyvirgo.com ↗</a
+            >
+          </p>
+        </footer>
+      </main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

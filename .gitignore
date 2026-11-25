@@ -1,0 +1,33 @@
+# Dependencies / build output
+node_modules/
+dist/
+dist-ssr/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment + Firebase debug artifacts — NEVER commit a debug token
+.env*
+*.local
+firebase-debug.log
+.firebaserc.local
+
+# Visual QC screenshots (generated locally, not part of the repo)
+screenshots/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
