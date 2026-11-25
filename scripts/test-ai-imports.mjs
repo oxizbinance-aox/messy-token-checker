@@ -141,7 +141,9 @@ passed += 1;
 console.log("PASS: prefetchAppCheckToken returns null in Node (no App Check instance)");
 
 // 7. timing.js — round-3 per-phase [ai-timing] log (console-only, shipped)
-const { createAiTimer } = await import(src("src/ai/timing.js"));
+const { createAiTimer, buildAiDiagnostics, phaseOfLine } = await import(
+  src("src/ai/timing.js")
+);
 check("timing.js exports createAiTimer", () =>
   assert.equal(typeof createAiTimer, "function"));
 check("createAiTimer().mark logs without throwing in Node", () => {
@@ -149,5 +151,76 @@ check("createAiTimer().mark logs without throwing in Node", () => {
   assert.equal(typeof timer.mark, "function");
   assert.equal(typeof timer.mark("probe", "extra"), "number");
 });
+
+// 8. timing.js — round 4: the timer RECORDS its lines (the on-page AI
+//    diagnostics block renders them; the cloud browser cannot open
+//    DevTools, so console-only lines were unreadable in live re-tests).
+check("timing.js exports buildAiDiagnostics + phaseOfLine", () => {
+  assert.equal(typeof buildAiDiagnostics, "function");
+  assert.equal(typeof phaseOfLine, "function");
+});
+check("createAiTimer records every marked line in order", () => {
+  const timer = createAiTimer("check#7");
+  timer.mark("runAi start", "mode=cloud-only");
+  timer.mark("appcheck:getToken start");
+  timer.mark("appcheck:getToken ok", "(token expires in 3599s)");
+  assert.equal(timer.lines.length, 3);
+  assert.ok(timer.lines[0].startsWith("[ai-timing check#7] runAi start +"));
+  assert.ok(timer.lines[0].endsWith("mode=cloud-only"));
+  assert.ok(timer.lines[2].includes("appcheck:getToken ok"));
+  assert.ok(timer.lines[2].includes("(token expires in 3599s)"));
+});
+check("phaseOfLine extracts the stalled phase from a timing line", () => {
+  assert.equal(
+    phaseOfLine("[ai-timing check#7] generateContent start +1237ms"),
+    "generateContent",
+  );
+  assert.equal(
+    phaseOfLine("[ai-timing check#7] appcheck:getToken start +3ms"),
+    "appcheck:getToken",
+  );
+  assert.equal(
+    phaseOfLine("[ai-timing check#7] model:create cloud-only +1236ms"),
+    "model:create",
+  );
+  assert.equal(phaseOfLine("not a timing line"), null);
+  assert.equal(phaseOfLine(null), null);
+});
+check("buildAiDiagnostics snapshots lines + lastPhase + mode/outcome", () => {
+  const timer = createAiTimer("retry");
+  timer.mark("runAi start", "mode=cloud-only");
+  timer.mark("appcheck:getToken start");
+  const diag = buildAiDiagnostics(timer, {
+    mode: "cloud-only",
+    outcome: "error",
+    error: "The cloud AI request timed out after 90s.",
+    probeLine: "[ai-timing probe] nano-probe status=unavailable +3ms",
+  });
+  assert.equal(diag.mode, "cloud-only");
+  assert.equal(diag.outcome, "error");
+  assert.equal(diag.error, "The cloud AI request timed out after 90s.");
+  assert.equal(diag.lastPhase, "appcheck:getToken");
+  assert.deepEqual(diag.lines, timer.lines);
+  assert.notEqual(diag.lines, timer.lines, "lines must be a copy, not the live array");
+  assert.equal(
+    diag.probeLine,
+    "[ai-timing probe] nano-probe status=unavailable +3ms",
+  );
+  // No attempt ran (null timer) → empty lines, no phase, no crash.
+  const empty = buildAiDiagnostics(null, { outcome: "skipped" });
+  assert.deepEqual(empty.lines, []);
+  assert.equal(empty.lastPhase, null);
+  assert.equal(empty.outcome, "skipped");
+});
+
+// 9. hybrid.js — checkNanoAvailability returns the probe ms (round 4:
+//    main.js rebuilds the exact "[ai-timing probe]" line for the
+//    on-page diagnostics block from it).
+assert.equal(
+  typeof (await hybrid.checkNanoAvailability()).ms,
+  "number",
+);
+passed += 1;
+console.log("PASS: checkNanoAvailability returns probe ms (round-4 diagnostics)");
 
 console.log(`\nAll ${passed} checks passed.`);

@@ -1052,6 +1052,41 @@ input {
   font-size: 14.5px;
   max-width: 640px;
 }
+
+/* AI diagnostics (round 4) — collapsed by default. The live re-test
+   browser cannot open DevTools, so the [ai-timing] lines are rendered
+   here instead of console-only: a browser test reads them from the
+   page. Small, muted, out of the verdict story's way. */
+.ai-diagnostics {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.ai-diagnostics summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.ai-diagnostics summary:hover {
+  color: var(--text-muted);
+}
+.ai-diagnostics pre {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
 .ai-unavailable .btn-secondary {
   margin-top: 14px;
 }

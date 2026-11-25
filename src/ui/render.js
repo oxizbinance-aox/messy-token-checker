@@ -118,6 +118,46 @@ function factorSection(label, weight, score, max, reasonsForFactor) {
 
 /* ------------------------------------------------------------ state views */
 
+/**
+ * On-page AI diagnostics (round 4) — the collapsed <details> block at
+ * the bottom of the AI card.
+ *
+ * WHY: the cloud browser used for live re-tests cannot open DevTools at
+ * all, so the console-only [ai-timing] lines from round 3 were
+ * unreadable and the round-3 re-test captured ZERO timings. This block
+ * renders the SAME lines in the page (plus mode, outcome, and the phase
+ * the attempt stalled at), so any browser test can read them without
+ * DevTools. Collapsed by default, small muted monospace — it is a
+ * debugging aid, not part of the verdict story. All content is escaped:
+ * timing lines are ours, but the raw error can contain model output.
+ *
+ * @param {object|null} diag — buildAiDiagnostics() output, or null when
+ *   no AI attempt ran for this result.
+ */
+function renderAiDiagnostics(diag) {
+  if (!diag) return "";
+  const lines = [...(diag.lines ?? [])];
+  if (diag.probeLine) lines.unshift(diag.probeLine);
+  const bodyLines = [
+    `mode: ${diag.mode ?? "n/a"}`,
+    `outcome: ${diag.outcome ?? "n/a"}`,
+  ];
+  // "stalled at" only means something on a failed attempt — on success
+  // the last line is just "runAi done", not a stall.
+  if (diag.outcome && diag.outcome !== "ok" && diag.lastPhase) {
+    bodyLines.push(`stalled at: ${diag.lastPhase}`);
+  }
+  if (diag.error) bodyLines.push(`error: ${diag.error}`);
+  bodyLines.push("");
+  if (lines.length > 0) bodyLines.push(...lines);
+  else bodyLines.push("(no timing lines recorded)");
+  return `
+    <details class="ai-diagnostics" data-testid="ai-diagnostics">
+      <summary>AI diagnostics</summary>
+      <pre>${esc(bodyLines.join("\n"))}</pre>
+    </details>`;
+}
+
 /** Empty state — shown before the first check. */
 export function renderEmptyState(container) {
   if (!container) return;
@@ -261,11 +301,13 @@ export function renderError(container, { kind, message, address }) {
  * @param {object|null} result.ai — { data, route, routeCertain } from
  *   explainVerdict(), or null when the AI call failed
  * @param {string|null} result.aiError — human-readable AI failure reason
+ * @param {object|null} result.aiDiagnostics — buildAiDiagnostics() output
+ *   for the on-page "AI diagnostics" block (round 4)
  * @param {Function} result.onRetryAi — called by the Retry button
  */
 export function renderResult(container, result) {
   if (!container) return;
-  const { pairs, goplus, score, capped, goplusDown, ai, aiError } = result;
+  const { pairs, goplus, score, capped, goplusDown, ai, aiError, aiDiagnostics } = result;
   const token = pairs?.token ?? {};
   const symbol = token.symbol ?? "Unknown token";
   const name = token.name ?? "";
@@ -323,6 +365,7 @@ export function renderResult(container, result) {
              <ol class="ai-steps">${ai.data.nextSteps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>`
           : ""
       }
+      ${renderAiDiagnostics(aiDiagnostics)}
     </section>`
     : `
     <section class="card ai-card ai-unavailable" aria-labelledby="ai-title">
@@ -335,6 +378,7 @@ export function renderResult(container, result) {
       <p>${esc(aiError ?? "The AI call failed.")} The score above is computed
       locally and unaffected — it does not depend on the AI at all.</p>
       <button type="button" class="btn-secondary" data-action="retry-ai">Retry AI explanation</button>
+      ${renderAiDiagnostics(aiDiagnostics)}
     </section>`;
 
   container.innerHTML = `

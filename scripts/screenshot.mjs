@@ -265,6 +265,30 @@ try {
   } else {
     check("desktop: route badge present", false, "no badge and no unavailable card");
   }
+  // AI diagnostics block (round 4): the cloud browser cannot open
+  // DevTools, so the [ai-timing] lines must be readable IN THE PAGE.
+  // In this sandbox the AI call fails (no browser egress to Google), so
+  // the block sits in the AI-unavailable card and must show the stall.
+  const dDiag = dPage.locator('[data-testid="ai-diagnostics"]');
+  check(
+    "desktop: AI diagnostics block present in the AI card",
+    (await dDiag.count()) === 1,
+  );
+  const dDiagText = (await dDiag.first().textContent()) ?? "";
+  check(
+    "desktop: diagnostics block shows the summary label",
+    dDiagText.includes("AI diagnostics"),
+  );
+  check(
+    "desktop: diagnostics block shows [ai-timing] lines incl. the App Check phase",
+    dDiagText.includes("[ai-timing") && dDiagText.includes("appcheck:getToken"),
+    dDiagText.slice(0, 160).replace(/\s+/g, " "),
+  );
+  check(
+    "desktop: diagnostics block names the stalled phase on failure",
+    dDiagText.includes("stalled at:"),
+    dDiagText.slice(0, 160).replace(/\s+/g, " "),
+  );
   await dPage.screenshot({
     path: path.join(shotsDir, "desktop-messy.png"),
     fullPage: true,
@@ -296,6 +320,11 @@ try {
   );
   const mVerdict = (await mPage.textContent(".dial-verdict-label"))?.trim();
   check("mobile: $MESSY result renders", mVerdict === "WATCH", `verdict ${mVerdict}`);
+  // AI diagnostics block (round 4) must render on mobile too.
+  check(
+    "mobile: AI diagnostics block present in the AI card",
+    (await mPage.locator('[data-testid="ai-diagnostics"]').count()) === 1,
+  );
   await mPage.screenshot({
     path: path.join(shotsDir, "mobile-messy.png"),
     fullPage: true,

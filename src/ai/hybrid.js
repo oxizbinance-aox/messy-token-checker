@@ -262,20 +262,27 @@ export async function checkNanoAvailability() {
   // Round-3 timing: the probe is phase (a) of the AI path. Log it in the
   // same [ai-timing] format so the live re-test can see whether the probe
   // itself ever stalls (it is a local API and normally resolves in ms).
+  // Round 4: the elapsed ms is also returned, so main.js can rebuild the
+  // exact probe line for the on-page AI diagnostics block (the cloud
+  // browser cannot open DevTools, so console lines alone are unreadable).
   const hasPerf =
     typeof performance !== "undefined" &&
     typeof performance.now === "function";
   const t0 = hasPerf ? performance.now() : Date.now();
   const ms = () =>
     Math.round((hasPerf ? performance.now() : Date.now()) - t0);
-  const log = (status) =>
-    console.log(`[ai-timing probe] nano-probe status=${status} +${ms()}ms`);
+  const log = (status) => {
+    const probeMs = ms();
+    console.log(`[ai-timing probe] nano-probe status=${status} +${probeMs}ms`);
+    return probeMs;
+  };
   if (typeof LanguageModel === "undefined") {
-    log("unavailable");
+    const probeMs = log("unavailable");
     return {
       status: "unavailable",
       detail:
         "LanguageModel (Prompt API) is not present in this browser. On-device inference needs Chrome on Desktop v139+ with the Prompt API flag enabled.",
+      ms: probeMs,
     };
   }
   try {
@@ -285,19 +292,21 @@ export async function checkNanoAvailability() {
       status === "downloading" ||
       status === "downloadable"
     ) {
-      log(status);
-      return { status, detail: `LanguageModel.availability() returned "${status}".` };
+      const probeMs = log(status);
+      return { status, detail: `LanguageModel.availability() returned "${status}".`, ms: probeMs };
     }
-    log("unavailable");
+    const probeMs = log("unavailable");
     return {
       status: "unavailable",
       detail: `LanguageModel.availability() returned "${status}".`,
+      ms: probeMs,
     };
   } catch (err) {
-    log("unavailable");
+    const probeMs = log("unavailable");
     return {
       status: "unavailable",
       detail: `LanguageModel.availability() threw: ${err?.message || err}`,
+      ms: probeMs,
     };
   }
 }

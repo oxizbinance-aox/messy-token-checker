@@ -34,7 +34,7 @@
 import "./style.css";
 import "./firebase.js"; // eager initFirebase() on import
 import { prefetchAppCheckToken } from "./firebase.js";
-import { createAiTimer } from "./ai/timing.js";
+import { createAiTimer, buildAiDiagnostics } from "./ai/timing.js";
 import { fetchTokenPairs, isValidAddress, DexscreenerError } from "./data/dexscreener.js";
 import { fetchTokenSecurity } from "./data/goplus.js";
 import { withTimeout } from "./data/http.js";
@@ -123,6 +123,15 @@ let overallTimer = null;
  * Updated by each check; retryAi reuses the last value.
  */
 let lastNanoUnavailable = false;
+/**
+ * The [ai-timing] timer of the last AI attempt (runAi sets it) and the
+ * last Nano probe result (refreshNanoChip sets it, tagged with the
+ * check sequence that fired it). Round 4: the on-page "AI diagnostics"
+ * block is built from these — the cloud browser cannot open DevTools,
+ * so console-only timing lines are unreadable in live re-tests.
+ */
+let lastAiTimer = null;
+let lastNanoProbe = null;
 
 /** Reset the check button / checking flag and clear the watchdog. */
 function finishCheck() {
@@ -165,14 +174,43 @@ async function refreshNanoChip() {
   try {
     const nano = await checkNanoAvailability();
     renderNanoChip(nanoChipEl, nano);
+    lastNanoProbe = nano;
     return nano;
   } catch {
     renderNanoChip(nanoChipEl, {
       status: "unavailable",
       detail: "checkNanoAvailability() failed.",
     });
+    lastNanoProbe = { status: "unavailable", detail: "", ms: null };
     return { status: "unavailable", detail: "" };
   }
+}
+
+/**
+ * Snapshot the last AI attempt's diagnostics for the on-page block.
+ * The probe line is included only when it belongs to this check's
+ * sequence (the probe is fire-and-forget and may still be resolving
+ * when the AI step starts; a stale probe from a previous check would
+ * mislabel the attempt). Retry reuses the check's probe — same browser,
+ * same session — so its seq tag still matches.
+ *
+ * @param {number|null} seq — the check sequence this snapshot belongs to
+ * @param {string} outcome — "ok" | "error" | "skipped"
+ * @param {string|null} error — raw error message, if the attempt failed
+ */
+function captureAiDiagnostics(seq, outcome, error) {
+  const probeLine =
+    lastNanoProbe && (seq == null || lastNanoProbe.seq === seq)
+      ? lastNanoProbe.ms != null
+        ? `[ai-timing probe] nano-probe status=${lastNanoProbe.status} +${lastNanoProbe.ms}ms`
+        : `[ai-timing probe] nano-probe status=${lastNanoProbe.status} (timing n/a)`
+      : null;
+  return buildAiDiagnostics(lastAiTimer, {
+    mode: lastAiTimer?.mode ?? null,
+    outcome,
+    error,
+    probeLine,
+  });
 }
 
 /* ------------------------------------------------------------ the check */
@@ -218,6 +256,11 @@ async function runCheck(address) {
 
   // 3. Nano status — fire and forget, never blocks the check.
   const nanoPromise = refreshNanoChip();
+  // Tag the probe with this check's sequence so the AI diagnostics
+  // block only shows the probe that belongs to this check (round 4).
+  nanoPromise.then((n) => {
+    lastNanoProbe = { ...n, seq: mySeq };
+  });
 
   // 4. Create the model INSIDE the click handler (user activation).
   //    The cloud toggle is read at click time.
@@ -377,6 +420,8 @@ async function runCheck(address) {
   let prompt = null;
   let ai = null;
   let aiError = null;
+  let aiRawError = null;
+  let aiDiagnostics = null;
   try {
     prompt = buildVerdictPrompt({
       token: pairs.token,
@@ -386,6 +431,7 @@ async function runCheck(address) {
     lastPrompt = prompt;
   } catch (err) {
     aiError = `Could not build the AI prompt: ${err?.message ?? err}`;
+    aiRawError = err?.message ?? String(err);
     lastPrompt = null;
   }
 
@@ -394,9 +440,12 @@ async function runCheck(address) {
     markLoadingStep(statusEl, "ai", "active");
     try {
       ai = await runAi(prompt, useCloudOnly, model, lastNanoUnavailable, `check#${mySeq}`);
+      aiDiagnostics = captureAiDiagnostics(mySeq, "ok", null);
     } catch (err) {
+      aiRawError = err?.message ?? String(err);
       aiError = humanAiError(err);
       ai = null;
+      aiDiagnostics = captureAiDiagnostics(mySeq, "error", aiRawError);
     }
     markLoadingStep(statusEl, "ai", "done");
   } else if (prompt && !model) {
@@ -404,10 +453,12 @@ async function runCheck(address) {
     markLoadingStep(statusEl, "ai", "done");
     aiError =
       "The AI model could not be created in this browser (Firebase AI Logic is not initialized).";
+    aiDiagnostics = captureAiDiagnostics(mySeq, "skipped", aiError);
   } else {
     // No prompt (prompt build failed) — the AI stage is over either way.
     markLoadingStep(statusEl, "score", "done");
     markLoadingStep(statusEl, "ai", "done");
+    aiDiagnostics = captureAiDiagnostics(mySeq, "skipped", aiRawError);
   }
   if (mySeq !== checkSeq) return; // cancelled while the AI was running
 
@@ -421,6 +472,8 @@ async function runCheck(address) {
     goplusDown,
     ai,
     aiError,
+    aiDiagnostics,
+    checkSeq: mySeq,
     onRetryAi: () => retryAi(),
   };
   renderResult(resultsEl, currentResult);
@@ -477,9 +530,14 @@ async function runCheck(address) {
  */
 async function runAi(prompt, cloudOnly, existingModel = null, nanoUnavailable = false, checkId = "check") {
   const timer = createAiTimer(checkId);
+  // Round 4: remember this attempt's timer + mode so the on-page AI
+  // diagnostics block can snapshot its recorded lines (the cloud
+  // browser cannot open DevTools, so console-only lines are unreadable).
+  lastAiTimer = timer;
+  timer.mode = cloudOnly || nanoUnavailable ? "cloud-only" : "hybrid";
   timer.mark(
     "runAi start",
-    `mode=${cloudOnly || nanoUnavailable ? "cloud-only" : "hybrid"}`,
+    `mode=${timer.mode}`,
   );
 
   // App Check token prefetch (round 3) — the prime suspect for the 90s
@@ -625,7 +683,12 @@ async function retryAi() {
     // 90s hybrid attempt first.
     const ai = await runAi(lastPrompt, cloudToggle?.checked === true, null, lastNanoUnavailable, "retry");
     if (currentResult !== target) return; // a new check replaced the result
-    currentResult = { ...currentResult, ai, aiError: null };
+    currentResult = {
+      ...currentResult,
+      ai,
+      aiError: null,
+      aiDiagnostics: captureAiDiagnostics(target.checkSeq ?? null, "ok", null),
+    };
     renderResult(resultsEl, currentResult);
   } catch (err) {
     if (currentResult !== target) return;
@@ -633,6 +696,11 @@ async function retryAi() {
       ...currentResult,
       ai: null,
       aiError: humanAiError(err),
+      aiDiagnostics: captureAiDiagnostics(
+        target.checkSeq ?? null,
+        "error",
+        err?.message ?? String(err),
+      ),
     };
     renderResult(resultsEl, currentResult);
   }
